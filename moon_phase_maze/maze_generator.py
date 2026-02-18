@@ -48,6 +48,8 @@ class GeneratorConfig:
     track: RoomTrack
     rng_seed: int
     dead_end_per_wrong_choice: bool = True
+    dead_ends_backtrackable: bool = True
+    reveal_dead_end_correct_answer: bool = False
 
 
 def _slug(text: str) -> str:
@@ -59,10 +61,6 @@ def _slug(text: str) -> str:
     return s
 
 
-def _door_prompt(stage: str) -> str:
-    return f"Choose the door that best matches what should come after '{stage}'."
-
-
 def _phase_room_description(stage: str, index: int, total: int) -> str:
     return (
         f"You are in chamber {index + 1} of {total}.\n"
@@ -71,11 +69,44 @@ def _phase_room_description(stage: str, index: int, total: int) -> str:
     )
 
 
-def _dead_end_description(stage: str, wrong_phase: str) -> str:
+def _dead_end_description(
+    stage: str,
+    wrong_phase: str,
+    backtrackable: bool,
+    reveal_correct_answer: bool,
+    correct_answer: str,
+) -> str:
+    ending = (
+        "A narrow passage opens behind you. You can turn around and try again."
+        if backtrackable
+        else "No further doors appear."
+    )
+    hint = (
+        f"\nA hidden glyph reveals the right door was '{correct_answer}'."
+        if reveal_correct_answer
+        else ""
+    )
     return (
         "The door seals behind you. The room is silent and the ink dries to stone.\n"
         f"You followed '{wrong_phase}' when the maze demanded the next step after '{stage}'.\n"
-        "No further doors appear."
+        f"{ending}{hint}"
+    )
+
+
+def _dead_end_exit(back_target: str, backtrackable: bool) -> tuple[list[str], list[str]]:
+    if backtrackable:
+        return (
+            [
+                "Turn around and retrace your steps.",
+                "Follow the narrow passage back.",
+                "Return to the previous chamber.",
+            ],
+            [back_target, back_target, back_target],
+        )
+
+    return (
+        ["Sit in silence.", "Accept your fate.", "Fade into ink."],
+        ["END", "END", "END"],
     )
 
 
@@ -110,13 +141,23 @@ def generate_phase_maze(config: GeneratorConfig) -> str:
         else:
             dead_name = f"dead_beginning_{idx + 1}_{_slug(option)}"
             start_targets.append(dead_name)
+            dead_end_answers, dead_end_targets = _dead_end_exit(
+                start_name,
+                config.dead_ends_backtrackable,
+            )
             dead_end_knots.append(
                 InkKnot(
-                    description=_dead_end_description("the beginning", option),
-                    answers=["Sit in silence.", "Accept your fate.", "Fade into ink."],
+                    description=_dead_end_description(
+                        "the beginning",
+                        option,
+                        config.dead_ends_backtrackable,
+                        config.reveal_dead_end_correct_answer,
+                        first_stage,
+                    ),
+                    answers=dead_end_answers,
                     correct_answer_index=0,
                     name=dead_name,
-                    targets=["END", "END", "END"],
+                    targets=dead_end_targets,
                 )
             )
 
@@ -137,6 +178,7 @@ def generate_phase_maze(config: GeneratorConfig) -> str:
     for i, stage in enumerate(stages):
         room_name = f"phase_{_slug(stage)}"
         next_target = final_name if i == len(stages) - 1 else f"phase_{_slug(stages[i + 1])}"
+        correct_answer_label = stages[i + 1] if i < len(stages) - 1 else "Open the exit archway"
 
         wrong_pool = [s for s in stages if s != (stages[i + 1] if i < len(stages) - 1 else stage)]
         wrong_choices = rng.sample(wrong_pool, 2)
@@ -152,13 +194,23 @@ def generate_phase_maze(config: GeneratorConfig) -> str:
         for wrong_idx, wrong in enumerate(wrong_choices, start=1):
             dead_name = f"dead_{_slug(stage)}_{wrong_idx}_{_slug(wrong)}"
             targets.append(dead_name)
+            dead_end_answers, dead_end_targets = _dead_end_exit(
+                room_name,
+                config.dead_ends_backtrackable,
+            )
             dead_end_knots.append(
                 InkKnot(
-                    description=_dead_end_description(stage, wrong),
-                    answers=["The maze rejects you.", "Your path is over.", "All grows dark."],
+                    description=_dead_end_description(
+                        stage,
+                        wrong,
+                        config.dead_ends_backtrackable,
+                        config.reveal_dead_end_correct_answer,
+                        correct_answer_label,
+                    ),
+                    answers=dead_end_answers,
                     correct_answer_index=0,
                     name=dead_name,
-                    targets=["END", "END", "END"],
+                    targets=dead_end_targets,
                 )
             )
 
@@ -226,9 +278,26 @@ def main() -> None:
         default=list(DEFAULT_MOON_PHASES),
         help="Ordered progression stages; defaults to moon phases",
     )
+    parser.add_argument(
+        "--dead-ends-backtrackable",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether wrong-door dead ends allow returning to the previous room",
+    )
+    parser.add_argument(
+        "--reveal-dead-end-correct-answer",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether dead-end rooms reveal which answer was correct in the previous room",
+    )
     args = parser.parse_args()
 
-    config = GeneratorConfig(track=RoomTrack(name=args.track_name, stages=args.stages), rng_seed=args.seed)
+    config = GeneratorConfig(
+        track=RoomTrack(name=args.track_name, stages=args.stages),
+        rng_seed=args.seed,
+        dead_ends_backtrackable=args.dead_ends_backtrackable,
+        reveal_dead_end_correct_answer=args.reveal_dead_end_correct_answer,
+    )
     out_path = Path(args.output)
     write_maze(out_path, config)
     print(f"Generated maze at {out_path} (seed={args.seed}, stages={len(args.stages)})")
