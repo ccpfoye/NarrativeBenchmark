@@ -361,14 +361,21 @@ class InkMaze:
 
 
 def enable_langsmith(project_name: str) -> None:
-    """Enable LangSmith tracing for this run if credentials are available."""
+    """Enable LangSmith tracing only if credentials are available."""
+    # Only enable tracing when a LangSmith API key is present.
+    if not (os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")):
+        return
+
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGSMITH_TRACING", "true")
     os.environ.setdefault("LANGSMITH_PROJECT", project_name)
 
-
 def _create_chat_model(provider: str, model_name: str, temperature: float) -> Any:
-    """Create a chat model for the selected provider."""
+    """Create a model for the selected provider.
+
+    NOTE: For Hugging Face we use *text-generation* (HuggingFaceEndpoint) because
+    HF routed providers may not support chat-completions for many models.
+    """
     provider = provider.lower()
 
     if provider == "openai":
@@ -377,24 +384,25 @@ def _create_chat_model(provider: str, model_name: str, temperature: float) -> An
         return ChatOpenAI(model=model_name, temperature=temperature)
 
     if provider == "huggingface":
-        from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
+        from langchain_huggingface import HuggingFaceEndpoint
 
-        endpoint = HuggingFaceEndpoint(
+        # IMPORTANT:
+        # - task='text-generation' forces text-generation rather than chat-completions.
+        # - provider='hf-inference' uses Hugging Face serverless inference.
+        # - Most instruct models work here via text-generation.
+        return HuggingFaceEndpoint(
             repo_id=model_name,
             task="text-generation",
             temperature=temperature,
             max_new_tokens=512,
+            provider="hf-inference",
         )
-        return ChatHuggingFace(llm=endpoint)
 
     raise ValueError(f"Unsupported provider: {provider}. Use 'openai' or 'huggingface'.")
 
-
 def build_agent(maze: InkMaze, model_name: str, temperature: float, provider: str) -> Any:
     """Create a tool-calling LangChain agent over maze tools."""
-
-    from langchain.agents import AgentExecutor, create_tool_calling_agent
-    from langchain.tools import tool
+    from langchain_core.tools import tool
     from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
     @tool
@@ -429,15 +437,82 @@ def build_agent(maze: InkMaze, model_name: str, temperature: float, provider: st
     )
 
     tools = [read_current_room, pick_door, maze_status]
-    agent = create_tool_calling_agent(llm, tools, prompt)
 
-    return AgentExecutor(
-        agent=agent,
-        tools=tools,
-        verbose=True,
-        max_iterations=20,
-        return_intermediate_steps=True,
+        # Hugging Face text-generation models do not implement tool-calling (no bind_tools),
+    # so we run a small local controller loop instead of LangChain tool-calling agents.
+    if provider.lower() == "huggingface":
+
+        class _HFRunner:
+            def __init__(self, llm_model: Any):
+                self._llm = llm_model
+
+            def _pick(self, room_text: str) -> int:
+                # Force a tiny, machine-readable output.
+                prompt_text = (
+                    "You are navigating a maze. You must choose exactly one door number: 1, 2, or 3.\n"
+                    "Reply with ONLY the digit 1, 2, or 3 on a single line.\n\n"
+                    f"ROOM:\n{room_text}\n"
+                )
+                raw = self._llm.invoke(prompt_text)
+                text = raw if isinstance(raw, str) else getattr(raw, "content", str(raw))
+                m = re.search(r"\b([123])\b", text)
+                if not m:
+                    raise ValueError(f"Model did not return a door index. Got: {text!r}")
+                return int(m.group(1))
+
+            def invoke(self, _: dict[str, Any]) -> dict[str, Any]:
+                steps: list[tuple[Any, Any]] = []
+                for _i in range(20):
+                    room = maze.read_room()
+                    if maze.state.finished:
+                        break
+                    door = self._pick(room)
+                    obs = maze.choose_door(door)
+                    # Store a lightweight history compatible with your printing loop.
+                    steps.append((type("Action", (), {"tool": "pick_door", "tool_input": {"door_index": door}})(), obs))
+                    if maze.state.finished:
+                        break
+                return {
+                    "output": f"knot={maze.state.current_knot}, finished={maze.state.finished}",
+                    "intermediate_steps": steps,
+                }
+
+        return _HFRunner(llm)
+
+    # OpenAI (and other chat tool-calling models) can use LangChain's agent factory.
+    from langchain.agents import create_agent
+
+    system_prompt = (
+        "You are a careful maze navigator. "
+        "Always call read_current_room first, then select one door with pick_door. "
+        "Stop when maze_status indicates finished=True. "
+        "Briefly justify each door choice."
     )
+
+    agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt)
+
+    class _AgentRunner:
+        def __init__(self, wrapped_agent: Any):
+            self._agent = wrapped_agent
+
+        def invoke(self, _: dict[str, Any]) -> dict[str, Any]:
+            response = self._agent.invoke(
+                {"messages": [{"role": "user", "content": "Navigate the maze to completion."}]}
+            )
+            messages = response.get("messages", []) if isinstance(response, dict) else []
+            output = ""
+            for message in reversed(messages):
+                content = getattr(message, "content", None)
+                if isinstance(content, str) and content.strip():
+                    output = content
+                    break
+
+            if not output and isinstance(response, dict):
+                output = str(response)
+
+            return {"output": output, "intermediate_steps": []}
+
+    return _AgentRunner(agent)
 
 
 def main() -> None:

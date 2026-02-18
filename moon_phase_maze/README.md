@@ -29,6 +29,8 @@ python moon_phase_maze/maze_generator.py \
   --seed 11
 ```
 
+By default, dead-end rooms are now backtrackable, so a wrong choice sends the player to a side room that can route back to the previous chamber. To restore one-way dead ends, pass `--no-dead-ends-backtrackable`.
+
 ### Extending beyond moon phases
 
 The generator is structured around an ordered progression track (`RoomTrack`) so you can later swap moon phases for other room types by passing a different `--stages` sequence.
