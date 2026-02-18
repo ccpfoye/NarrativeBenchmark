@@ -19,6 +19,14 @@ Usage:
       --ink-file moon_phase_maze/lunar_phase_maze.ink \
       --start-knot beginning_room
 
+  # Local Transformers provider (runs on your own machine)
+  export LANGSMITH_API_KEY=...
+  python moon_phase_maze/langchain_ink_maze_agent.py \
+      --provider transformers \
+      --model google/gemma-2-2b-it \
+      --ink-file moon_phase_maze/lunar_phase_maze.ink \
+      --start-knot beginning_room
+
   # Or pass an inklecate-compiled JSON file directly:
   python moon_phase_maze/langchain_ink_maze_agent.py \
       --ink-file path/to/story.json \
@@ -398,7 +406,37 @@ def _create_chat_model(provider: str, model_name: str, temperature: float) -> An
             provider="hf-inference",
         )
 
-    raise ValueError(f"Unsupported provider: {provider}. Use 'openai' or 'huggingface'.")
+    if provider == "transformers":
+        from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        generator = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=96,
+            temperature=temperature,
+        )
+
+        class _LocalTransformersLLM:
+            def __init__(self, text_generator: Any):
+                self._text_generator = text_generator
+
+            def invoke(self, prompt_text: str) -> str:
+                outputs = self._text_generator(prompt_text)
+                if not outputs:
+                    return ""
+                generated = outputs[0].get("generated_text", "")
+                if generated.startswith(prompt_text):
+                    generated = generated[len(prompt_text):]
+                return generated.strip()
+
+        return _LocalTransformersLLM(generator)
+
+    raise ValueError(
+        f"Unsupported provider: {provider}. Use 'openai', 'huggingface', or 'transformers'."
+    )
 
 def build_agent(maze: InkMaze, model_name: str, temperature: float, provider: str) -> Any:
     """Create a tool-calling LangChain agent over maze tools."""
@@ -440,12 +478,21 @@ def build_agent(maze: InkMaze, model_name: str, temperature: float, provider: st
 
         # Hugging Face text-generation models do not implement tool-calling (no bind_tools),
     # so we run a small local controller loop instead of LangChain tool-calling agents.
-    if provider.lower() == "huggingface":
+    if provider.lower() in {"huggingface", "transformers"}:
+        try:
+            from langsmith import traceable
+        except ModuleNotFoundError:
+            def traceable(*_args: Any, **_kwargs: Any):
+                def _decorator(func: Any) -> Any:
+                    return func
+
+                return _decorator
 
         class _HFRunner:
             def __init__(self, llm_model: Any):
                 self._llm = llm_model
 
+            @traceable(name="maze_pick_door")
             def _pick(self, room_text: str) -> int:
                 # Force a tiny, machine-readable output.
                 prompt_text = (
@@ -460,6 +507,7 @@ def build_agent(maze: InkMaze, model_name: str, temperature: float, provider: st
                     raise ValueError(f"Model did not return a door index. Got: {text!r}")
                 return int(m.group(1))
 
+            @traceable(name="maze_navigation_run")
             def invoke(self, _: dict[str, Any]) -> dict[str, Any]:
                 steps: list[tuple[Any, Any]] = []
                 for _i in range(20):
@@ -519,7 +567,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ink-file", default="moon_phase_maze/lunar_phase_maze.ink")
     parser.add_argument("--start-knot", default="beginning_room")
-    parser.add_argument("--provider", choices=["openai", "huggingface"], default="openai")
+    parser.add_argument(
+        "--provider",
+        choices=["openai", "huggingface", "transformers"],
+        default="openai",
+    )
     parser.add_argument("--model", default="gpt-4o-mini")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--langsmith-project", default="ink-maze-langchain-agent")
@@ -533,7 +585,7 @@ def main() -> None:
         missing = exc.name or "a required package"
         raise SystemExit(
             f"Missing dependency: {missing}. Install langchain packages, e.g. "
-            "`pip install langchain langchain-openai langchain-huggingface`."
+            "`pip install langchain langchain-openai langchain-huggingface transformers`."
         ) from exc
 
     result = executor.invoke({})

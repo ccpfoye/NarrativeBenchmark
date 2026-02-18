@@ -76,6 +76,27 @@ python moon_phase_maze/langchain_ink_maze_agent.py \
   --langsmith-project ink-maze-langchain-agent
 ```
 
+To run locally on your own machine with Hugging Face Transformers:
+
+```bash
+export LANGSMITH_API_KEY=...
+python moon_phase_maze/langchain_ink_maze_agent.py \
+  --provider transformers \
+  --model google/gemma-2-2b-it \
+  --ink-file moon_phase_maze/lunar_phase_maze.ink \
+  --start-knot beginning_room \
+  --langsmith-project ink-maze-langchain-agent
+```
+
+Notes for local Transformers runs:
+
+- The model will be downloaded and executed locally (CPU/GPU depending on your setup).
+- Install dependencies with:
+
+```bash
+pip install langchain langchain-openai langchain-huggingface transformers langsmith
+```
+
 The script enables `LANGSMITH_TRACING`/`LANGCHAIN_TRACING_V2` and prints
 `intermediate_steps` locally so you can inspect behavior both in terminal and in LangSmith.
 
