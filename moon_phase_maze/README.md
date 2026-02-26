@@ -59,8 +59,7 @@ python moon_phase_maze/langchain_ink_maze_agent.py \
   --provider openai \
   --model gpt-4o-mini \
   --ink-file moon_phase_maze/lunar_phase_maze.ink \
-  --start-knot beginning_room \
-  --langsmith-project ink-maze-langchain-agent
+  --start-knot beginning_room 
 ```
 
 To run with a Hugging Face-backed agent:
@@ -79,13 +78,12 @@ python moon_phase_maze/langchain_ink_maze_agent.py \
 To run locally on your own machine with Hugging Face Transformers:
 
 ```bash
-export LANGSMITH_API_KEY=...
 python moon_phase_maze/langchain_ink_maze_agent.py \
   --provider transformers \
-  --model google/gemma-2-2b-it \
+  --model Qwen/Qwen2.5-7B-Instruct \
   --ink-file moon_phase_maze/lunar_phase_maze.ink \
   --start-knot beginning_room \
-  --langsmith-project ink-maze-langchain-agent
+  --temperature 0.7 
 ```
 
 Notes for local Transformers runs:

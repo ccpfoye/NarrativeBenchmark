@@ -52,7 +52,9 @@ from pathlib import Path
 import tempfile
 import subprocess
 from typing import Any
-
+from langsmith import Client
+from dotenv import load_dotenv
+load_dotenv()
 
 
 @dataclass
@@ -367,16 +369,16 @@ class InkMaze:
             "Now inspect the new room."
         )
 
-
 def enable_langsmith(project_name: str) -> None:
-    """Enable LangSmith tracing only if credentials are available."""
-    # Only enable tracing when a LangSmith API key is present.
-    if not (os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY")):
+    if not os.getenv("LANGSMITH_API_KEY"):
         return
 
-    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGSMITH_TRACING", "true")
     os.environ.setdefault("LANGSMITH_PROJECT", project_name)
+
+    # Optional, but helpful in short scripts:
+    # os.environ.setdefault("LANGSMITH_TRACING_BACKGROUND", "false")
+
 
 def _create_chat_model(provider: str, model_name: str, temperature: float) -> Any:
     """Create a model for the selected provider.
@@ -578,17 +580,18 @@ def main() -> None:
     args = parser.parse_args()
 
     enable_langsmith(args.langsmith_project)
-    maze = InkMaze.from_file(args.ink_file, start_knot=args.start_knot)
-    try:
-        executor = build_agent(maze, model_name=args.model, temperature=args.temperature, provider=args.provider)
-    except ModuleNotFoundError as exc:
-        missing = exc.name or "a required package"
-        raise SystemExit(
-            f"Missing dependency: {missing}. Install langchain packages, e.g. "
-            "`pip install langchain langchain-openai langchain-huggingface transformers`."
-        ) from exc
 
-    result = executor.invoke({})
+    maze = InkMaze.from_file(args.ink_file, start_knot=args.start_knot)
+    
+    ls_client = Client()
+
+    try:
+        maze = InkMaze.from_file(args.ink_file, start_knot=args.start_knot)
+        executor = build_agent(maze, model_name=args.model, temperature=args.temperature, provider=args.provider)
+        result = executor.invoke({})
+    finally:
+        # CRITICAL: upload buffered traces even if an exception is thrown
+        ls_client.flush()
 
     print("\n=== Final output ===")
     print(result["output"])
