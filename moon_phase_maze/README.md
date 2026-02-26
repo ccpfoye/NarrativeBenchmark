@@ -46,7 +46,7 @@ python moon_phase_maze/maze_generator.py \
 
 ## LangChain + LangSmith maze agent
 
-A ready-to-run LangChain agent is provided at `moon_phase_maze/langchain_ink_maze_agent.py`.
+A ready-to-run LangChain agent is provided at `moon_phase_maze/run_ink_maze_agent.py`.
 It exposes three tools (`read_current_room`, `pick_door`, and `maze_status`) so the LLM can
 choose among three doors in each knot.
 
@@ -55,7 +55,7 @@ To run with LangSmith tracing/history (OpenAI):
 ```bash
 export OPENAI_API_KEY=...
 export LANGSMITH_API_KEY=...
-python moon_phase_maze/langchain_ink_maze_agent.py \
+python moon_phase_maze/run_ink_maze_agent.py \
   --provider openai \
   --model gpt-4o-mini \
   --ink-file moon_phase_maze/lunar_phase_maze.ink \
@@ -67,7 +67,7 @@ To run with a Hugging Face-backed agent:
 ```bash
 export HUGGINGFACEHUB_API_TOKEN=...
 export LANGSMITH_API_KEY=...
-python moon_phase_maze/langchain_ink_maze_agent.py \
+python moon_phase_maze/run_ink_maze_agent.py \
   --provider huggingface \
   --model meta-llama/Meta-Llama-3-8B-Instruct \
   --ink-file moon_phase_maze/lunar_phase_maze.ink \
@@ -78,7 +78,7 @@ python moon_phase_maze/langchain_ink_maze_agent.py \
 To run locally on your own machine with Hugging Face Transformers:
 
 ```bash
-python moon_phase_maze/langchain_ink_maze_agent.py \
+python moon_phase_maze/run_ink_maze_agent.py \
   --provider transformers \
   --model Qwen/Qwen2.5-7B-Instruct \
   --ink-file moon_phase_maze/lunar_phase_maze.ink \
